@@ -123,37 +123,74 @@ A third upstream mitigation would be for Floci to reconcile container state
 against persisted metadata on startup, or to report a resource as
 `creating`/`failed` when its container is gone.
 
-### Open: why was the RDS volume not re-adopted?
+### Answered: why the data did not survive
 
-Deferred rather than answered, and tracked as P6 in the plan. The evidence is
-ambiguous: across a restart the RDS container kept its name, which argues the
-volume binding *was* preserved, yet its uptime suggested it had been recreated
-and the schema was gone either way. The decisive observation was not captured -
-comparing `docker inspect -f '{{json .Mounts}}'` and `docker volume ls` before
-and after - so three outcomes are still open:
+Investigated on Okteto with persistence enabled. The first hypothesis was wrong:
+RDS restores correctly. `RdsService.restorePersistedRuntime()` calls
+`restoreClusters()`, `restoreInstances()` and `restoreProxies()`, and the
+container comes back. The data loss was a **configuration mistake**, not a bug.
 
-| Observation | Meaning |
-|---|---|
-| same container name, same volume | binding is fine; the fault is elsewhere in the restore path |
-| same container name, **new** volume | volume name regenerated, old data orphaned (leading hypothesis) |
-| container never recreated | the restore path does not run at all |
+One line decides it:
 
-The code to read once it is known: `RdsContainerManager`
-(`containerStorageResourceId`, `dockerVolumeName`, `claimStorage`,
-`addPersistenceMounts`) and `ContainerStorageHelper.isNamedVolumeMode`. Also
-worth checking whether ElastiCache and OpenSearch have any restore path at all -
-the Valkey container was removed outright, which suggests not.
+```java
+// ContainerStorageHelper.java:170
+public static boolean isNamedVolumeMode(EmulatorConfig config) {
+    return !config.storage().hostPersistentPath().startsWith("/");
+}
+```
 
-Enabling persistence itself is three lines (`FLOCI_STORAGE_MODE=hybrid`,
-`FLOCI_STORAGE_PERSISTENT_PATH=/app/data`, and `-v floci-data:/app/data` on the
-inner container; no new PVC, since Docker named volumes already sit on the
-existing one). The work is the app-side consequence: with persistence, `Ensure`
-cannot stay "create if absent", because a resource whose container is gone still
-reports `available`, so `Ensure` skips it and the app hangs. It would need to
-verify the resource works and delete-and-recreate when it does not - destructive,
-so worth gating behind an env var.
+`hostPersistentPath` defaults to `${floci.storage.persistent-path}`. Setting
+`FLOCI_STORAGE_PERSISTENT_PATH=/app/data` — absolute, and mandatory for Floci's
+own metadata because the image chowns exactly that path — selects **legacy
+bind-mount mode**. There the bind source is `/app/data/rds/<id>`, resolved by
+*dockerd against its own filesystem*: the DinD container's ephemeral root fs, not
+the PVC. PostgreSQL got a fresh empty directory on every start.
 
-## The upstream fix
+**The fix**, verified: add `FLOCI_STORAGE_HOST_PERSISTENT_PATH=data` — relative,
+so named-volume mode is selected. Volumes then live under
+`/var/lib/docker/volumes`, which is the PVC.
+
+```
+before: type=volume src=/var/lib/docker/volumes/floci-rds-db-…/_data
+after `kubectl delete pod floci-0`: 9 rows, including the marker written before
+```
+
+### The real blocker: container re-creation, per service
+
+| Service | Volume survives | Container re-created | Control plane reports |
+|---|---|---|---|
+| RDS | yes — 46 MB | yes, `restorePersistedRuntime()` | `available` — accurate |
+| OpenSearch | yes — index intact | **no restore path** | `Created=True` — false |
+| ElastiCache | **no storage at all** | **no restore path** | `available` — false |
+
+Observed inside the pod after a delete: only the RDS and Floci containers were
+running while the control plane reported all three healthy. `ElastiCacheService`
+and `OpenSearchService` contain no restore logic, and ElastiCache has no
+persistence code path at all — its container runs with zero mounts by design.
+
+The app-side consequence landed as predicted: `Ensure` skipped creation because
+the resources "existed", `WaitReady` trusted the control plane, and the API then
+looped on `valkey:6379 connect: connection refused` **indefinitely**.
+
+### What would make persistence viable
+
+The pieces do compose:
+
+1. RDS is genuinely durable with the config change above.
+2. ElastiCache holds no durable state, so deleting and re-creating the resource
+   when its container is missing costs nothing.
+3. OpenSearch's index would be lost on re-create, but the app already rebuilds it
+   from PostgreSQL via `reindexAll()` on every connect.
+
+So a verify-and-recreate `Ensure` — delete the resource when its container is
+gone rather than trusting `available` — plus the named-volume config would give
+real durability. Roughly 50 lines, destructive, worth gating behind an env var.
+
+**Recommendation: stay on memory mode until that exists.** Half-durable is worse
+than deterministically empty, because the failure is a silent hang rather than a
+visible reset.
+
+## The upstream fix## The upstream fix
 
 Floci already ships a Kubernetes executor — but **only for Lambda**:
 `FLOCI_SERVICES_LAMBDA_EXECUTOR=kubernetes` runs functions as pods and, in its
@@ -178,7 +215,13 @@ small:
    Floci-plus-DinD-sidecar topology work for all three, since IP routing works
    across a shared pod network namespace while Docker name resolution does not.
 
-2. **Extend the Kubernetes executor to the data services**, so RDS, ElastiCache
+2. **Add restore paths for ElastiCache and OpenSearch**, or report a resource as
+   `failed` when its container is missing. Confirmed absent: only RDS has
+   `restorePersistedRuntime()`. Today the control plane reports `available` for
+   resources whose containers are gone, which is unfixable from the client side
+   because "exists" and "works" are indistinguishable over the API.
+
+3. **Extend the Kubernetes executor to the data services**, so RDS, ElastiCache
    and OpenSearch engines run as pods. This is the change that would make Floci a
    first-class citizen on any Kubernetes development platform, with no privileged
    container anywhere.
