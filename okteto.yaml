@@ -10,6 +10,12 @@
 # Requires the privileged-container guardrail to be relaxed for the namespace.
 # See docs/okteto-implications.md.
 
+# Names the development environment. Without it the name is inferred, and
+# `okteto endpoints` then looks for an app that does not exist and reports no
+# endpoints even though the ingress is fine. Keep this and the deploy in step: a
+# `--name` flag still overrides it.
+name: floci-flix
+
 deploy:
   commands:
     - name: Floci (privileged DinD - not expressible in compose)

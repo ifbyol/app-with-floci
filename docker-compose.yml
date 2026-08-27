@@ -13,7 +13,9 @@
 # `privileged` is one of the few compose fields Okteto parses only to warn about,
 # so it comes from k8s/floci.yaml instead. The api service reaches it at
 # floci:4566 either way.
-name: floci-flix
+#
+# The environment name lives in okteto.yaml, which takes precedence over a
+# `name` here - one source of truth.
 
 services:
   api:
