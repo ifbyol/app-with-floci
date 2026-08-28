@@ -29,15 +29,9 @@ no socket to share, so in a cluster Floci has to bring its own daemon — which
 means a **privileged Docker-in-Docker pod**.
 
 > **This deployment needs Okteto's privileged-container guardrail relaxed for the
-> target namespace.** The guardrail lives in Okteto's mutating webhook, and it
-> *strips* the flag rather than rejecting the pod — so without the exception the
-> pod starts and `dockerd` fails later with a confusing cgroup error rather than
-> an admission error. If the Floci pod is running but never becomes ready, check
-> that `securityContext.privileged` survived admission:
->
-> ```bash
-> kubectl get pod -n <ns> floci-0 -o jsonpath='{.spec.containers[0].securityContext}'
-> ```
+> target namespace.** Okteto's mutating webhook strips the flag rather than
+> rejecting the pod, so without the exception the pod starts and `dockerd` fails
+> later instead of failing admission.
 
 ---
 
