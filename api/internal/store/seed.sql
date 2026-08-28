@@ -1,0 +1,72 @@
+-- Seed catalogue for Floci Flix.
+--
+-- Runs once, only when the movies table is empty (see App.seed). ON CONFLICT
+-- makes it safe to run again anyway: re-running must never resurrect a row
+-- somebody deleted, nor fail the app's startup.
+--
+-- PostgreSQL is the source of truth. Nothing here touches OpenSearch - the
+-- index is rebuilt from these rows by reindexAll() on every connect, which is
+-- also what repairs the index after Floci replaces the OpenSearch container.
+
+INSERT INTO movies (id, title, year, genre, director, synopsis, rating) VALUES
+  ('the-shape-of-containers-2019', 'The Shape of Containers', 2019, 'Documentary', 'Ana Ruiz',
+   'A crew of engineers packages an entire datacentre into a single laptop and learns what leaks out.', 7.8),
+  ('namespace-1998', 'Namespace', 1998, 'Thriller', 'Piotr Nowak',
+   'Two processes share a machine but cannot see each other. One of them starts leaving messages.', 8.1),
+  ('the-privileged-2024', 'The Privileged', 2024, 'Drama', 'Marta Oliveira',
+   'A container escapes its sandbox and discovers it was root on the node all along.', 7.2),
+  ('cold-start-2021', 'Cold Start', 2021, 'Comedy', 'Dan Whitfield',
+   'A function takes eleven seconds to wake up and the whole company waits.', 6.9),
+  ('eventual-consistency-2016', 'Eventual Consistency', 2016, 'Romance', 'Yuki Tanaka',
+   'They agreed on everything, just never at the same time.', 7.5),
+  ('the-cache-invalidation-2012', 'The Cache Invalidation', 2012, 'Horror', 'Greta Lindqvist',
+   'The data was correct. It was simply four hours old, and nobody noticed until the audit.', 8.4),
+  ('fuzzy-match-2020', 'Fuzzy Match', 2020, 'Mystery', 'Samuel Adeyemi',
+   'A search engine returns the right answer to a question nobody asked.', 7.0),
+  ('port-forward-2023', 'Port Forward', 2023, 'Thriller', 'Claire Beaumont',
+   'The only way into the cluster is a tunnel that closes every thirty seconds.', 6.6),
+  ('split-brain-2015', 'Split Brain', 2015, 'Thriller', 'Hana Petrova',
+   'Two nodes are both certain they are the leader. Both keep accepting writes.', 8.3),
+  ('the-thundering-herd-2009', 'The Thundering Herd', 2009, 'Horror', 'Emeka Balogun',
+   'Every cache entry expires at midnight. Every client wakes at the same moment.', 7.9),
+  ('graceful-shutdown-2022', 'Graceful Shutdown', 2022, 'Drama', 'Lorna Vasquez',
+   'Thirty seconds to finish what you started, and a queue that does not care.', 7.4),
+  ('exponential-backoff-2018', 'Exponential Backoff', 2018, 'Romance', 'Tomas Herrera',
+   'She said try again later. Then later. Then very much later.', 6.8),
+  ('the-noisy-neighbour-2014', 'The Noisy Neighbour', 2014, 'Comedy', 'Ingrid Solberg',
+   'Sharing a node with someone who compiles all night and never asks first.', 6.4),
+  ('head-of-line-2011', 'Head of Line', 2011, 'Mystery', 'Dmitri Volkov',
+   'First in the queue, perfectly healthy, and nothing behind it moves.', 7.1),
+  ('immutable-2017', 'Immutable', 2017, 'Drama', 'Fatima Nasser',
+   'A tag that was supposed to mean latest, and four teams who disagree about when.', 7.6),
+  ('ambient-mesh-2025', 'Ambient Mesh', 2025, 'Thriller', 'Joon-ho Park',
+   'Every packet is inspected by something nobody remembers installing.', 6.7),
+  ('rollback-2013', 'Rollback', 2013, 'Documentary', 'Beatriz Cardoso',
+   'An oral history of the migration that shipped without a down script.', 8.0),
+  ('byzantine-2007', 'Byzantine', 2007, 'Mystery', 'Andrei Popescu',
+   'A third of the generals were lying, and the messages all looked identical.', 8.6),
+  ('write-amplification-2019', 'Write Amplification', 2019, 'Horror', 'Mei Lin Chao',
+   'One small field update. Forty gigabytes of disk, and a pager at 3am.', 7.3),
+  ('the-long-tail-2010', 'The Long Tail', 2010, 'Documentary', 'Oscar Delgado',
+   'The median was fine. The story lives entirely in the last one percent.', 7.7),
+  ('clock-skew-2006', 'Clock Skew', 2006, 'Mystery', 'Sofia Katsaros',
+   'The events arrived in the wrong order, and one of them had not happened yet.', 8.2),
+  ('blast-radius-2024', 'Blast Radius', 2024, 'Thriller', 'Nadia Farouk',
+   'One configuration change, applied everywhere, correctly, in under four seconds.', 8.5),
+  ('idempotent-2020', 'Idempotent', 2020, 'Comedy', 'Ruben Ortiz',
+   'He proposed four times. She accepted once. The outcome was identical.', 7.2),
+  ('the-straggler-2016', 'The Straggler', 2016, 'Drama', 'Aoife Brennan',
+   'Ninety-nine workers finished. The batch is not done until the hundredth does.', 7.5),
+  ('orphaned-2008', 'Orphaned', 2008, 'Horror', 'Viktor Almeida',
+   'The parent exited cleanly. The children are still running, and still writing.', 7.8),
+  ('backpressure-2022', 'Backpressure', 2022, 'Drama', 'Leila Haddad',
+   'A system learns to say no upstream, and discovers nobody was listening.', 7.9),
+  ('cardinality-2021', 'Cardinality', 2021, 'Mystery', 'Gustavo Pinto',
+   'Somebody put a user id in a metric label. The dashboards have not recovered.', 7.0),
+  ('the-retry-storm-2013', 'The Retry Storm', 2013, 'Horror', 'Karin Andersson',
+   'Everyone tried again at exactly the same moment, and kept trying.', 8.1),
+  ('cold-path-2018', 'Cold Path', 2018, 'Romance', 'Ismael Toure',
+   'The query nobody ran for two years, on the morning it finally mattered.', 6.5),
+  ('quorum-2005', 'Quorum', 2005, 'Drama', 'Elena Marchetti',
+   'Three of the five had to agree. One was asleep and one had opinions.', 8.4)
+ON CONFLICT (id) DO NOTHING;

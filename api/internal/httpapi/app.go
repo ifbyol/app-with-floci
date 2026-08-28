@@ -13,7 +13,6 @@ import (
 	"github.com/okteto/app-with-floci/api/internal/awsdisc"
 	"github.com/okteto/app-with-floci/api/internal/cache"
 	"github.com/okteto/app-with-floci/api/internal/config"
-	"github.com/okteto/app-with-floci/api/internal/model"
 	"github.com/okteto/app-with-floci/api/internal/search"
 	"github.com/okteto/app-with-floci/api/internal/store"
 )
@@ -188,34 +187,34 @@ func (a *App) closeDeps() {
 
 func (a *App) Close() { a.closeDeps() }
 
-// seed populates an empty catalogue so the demo always has something to search,
-// and indexes it so PostgreSQL and OpenSearch start out consistent.
+// seed loads the starter catalogue into PostgreSQL when it is empty, then
+// rebuilds the search index from whatever PostgreSQL holds.
+//
+// The rows live in store/seed.sql rather than in Go: it is data, it is easier to
+// extend, and it keeps PostgreSQL unambiguously the source of truth. OpenSearch
+// is never seeded directly - reindexAll derives it - which means one code path
+// covers both a first run and a Floci restart that replaced the search node
+// while leaving the database intact.
+// reindexAll keeps OpenSearch consistent with PostgreSQL. The search index lives
+// in a container whose lifecycle is independent of the database's, so the two
+// can drift - most obviously when only one of them is replaced.
 func (a *App) seed(ctx context.Context, st *store.Store, se *search.Search) error {
 	n, err := st.Count(ctx)
 	if err != nil {
 		return err
 	}
-	if n > 0 {
-		slog.Info("catalogue already populated", "movies", n)
-		return a.reindexAll(ctx, st, se)
-	}
-
-	slog.Info("seeding catalogue")
-	for _, m := range seedMovies {
-		saved, err := st.Insert(ctx, &m)
+	if n == 0 {
+		inserted, err := st.Seed(ctx)
 		if err != nil {
 			return err
 		}
-		if err := se.Index(ctx, saved); err != nil {
-			return err
-		}
+		slog.Info("seeded catalogue from seed.sql", "movies", inserted)
+	} else {
+		slog.Info("catalogue already populated", "movies", n)
 	}
-	return se.Refresh(ctx)
+	return a.reindexAll(ctx, st, se)
 }
 
-// reindexAll keeps OpenSearch consistent with PostgreSQL. The search index lives
-// in a container whose lifecycle is independent of the database's, so the two
-// can drift - most obviously when only one of them is replaced.
 func (a *App) reindexAll(ctx context.Context, st *store.Store, se *search.Search) error {
 	movies, err := st.All(ctx)
 	if err != nil {
@@ -228,23 +227,4 @@ func (a *App) reindexAll(ctx context.Context, st *store.Store, se *search.Search
 	}
 	slog.Info("reindexed catalogue into OpenSearch", "movies", len(movies))
 	return se.Refresh(ctx)
-}
-
-var seedMovies = []model.Movie{
-	{ID: "the-shape-of-containers-2019", Title: "The Shape of Containers", Year: 2019, Genre: "Documentary",
-		Director: "Ana Ruiz", Rating: 7.8, Synopsis: "A crew of engineers packages an entire datacentre into a single laptop and learns what leaks out."},
-	{ID: "namespace-1998", Title: "Namespace", Year: 1998, Genre: "Thriller",
-		Director: "Piotr Nowak", Rating: 8.1, Synopsis: "Two processes share a machine but cannot see each other. One of them starts leaving messages."},
-	{ID: "the-privileged-2024", Title: "The Privileged", Year: 2024, Genre: "Drama",
-		Director: "Marta Oliveira", Rating: 7.2, Synopsis: "A container escapes its sandbox and discovers it was root on the node all along."},
-	{ID: "cold-start-2021", Title: "Cold Start", Year: 2021, Genre: "Comedy",
-		Director: "Dan Whitfield", Rating: 6.9, Synopsis: "A function takes eleven seconds to wake up and the whole company waits."},
-	{ID: "eventual-consistency-2016", Title: "Eventual Consistency", Year: 2016, Genre: "Romance",
-		Director: "Yuki Tanaka", Rating: 7.5, Synopsis: "They agreed on everything, just never at the same time."},
-	{ID: "the-cache-invalidation-2012", Title: "The Cache Invalidation", Year: 2012, Genre: "Horror",
-		Director: "Greta Lindqvist", Rating: 8.4, Synopsis: "The data was correct. It was simply four hours old, and nobody noticed until the audit."},
-	{ID: "fuzzy-match-2020", Title: "Fuzzy Match", Year: 2020, Genre: "Mystery",
-		Director: "Samuel Adeyemi", Rating: 7.0, Synopsis: "A search engine returns the right answer to a question nobody asked."},
-	{ID: "port-forward-2023", Title: "Port Forward", Year: 2023, Genre: "Thriller",
-		Director: "Claire Beaumont", Rating: 6.6, Synopsis: "The only way into the cluster is a tunnel that closes every thirty seconds."},
 }

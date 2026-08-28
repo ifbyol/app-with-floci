@@ -128,6 +128,12 @@ DescribeDomain             -> floci:9400   ->  OpenSearch  (direct, see below)
 itself by that name, and it is both the compose service name and the Kubernetes
 Service name.
 
+On connect it also applies `internal/store/schema.sql`, loads
+`internal/store/seed.sql` when the table is empty, and rebuilds the OpenSearch
+index from whatever PostgreSQL holds. OpenSearch is never seeded directly, so a
+single path covers both a first run and a Floci restart that replaced the search
+node while leaving the database intact.
+
 The API also **creates** those three resources if they are missing, through the
 same SDK. That is why there are no Floci init hooks: hooks would have to exist
 twice — mounted from the repo locally, inlined into the manifest in the cluster —
@@ -188,7 +194,9 @@ okteto.yaml          Two things only: apply the Floci manifest, then the
 k8s/floci.yaml       The one manifest — StatefulSet + Service for privileged
                      Docker-in-Docker. Self-contained; nothing to template.
 api/                 Go: provisioning, discovery, the three data paths, the
-                     inspector endpoint
+                     inspector endpoint. internal/store/schema.sql is the DDL,
+                     internal/store/seed.sql the starter catalogue (30 movies),
+                     both embedded and applied on connect.
 web/                 React + Vite + TypeScript: search, detail, add, emulator
 docs/                Okteto implications and the guardrail decision
 

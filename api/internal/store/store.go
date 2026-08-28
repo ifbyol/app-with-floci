@@ -14,8 +14,8 @@ import (
 	"github.com/okteto/app-with-floci/api/internal/model"
 )
 
-//go:embed schema.sql
-var schemaFS embed.FS
+//go:embed schema.sql seed.sql
+var sqlFS embed.FS
 
 var ErrNotFound = errors.New("movie not found")
 
@@ -38,7 +38,7 @@ func (s *Store) Close() { s.pool.Close() }
 func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
 func (s *Store) Migrate(ctx context.Context) error {
-	ddl, err := schemaFS.ReadFile("schema.sql")
+	ddl, err := sqlFS.ReadFile("schema.sql")
 	if err != nil {
 		return err
 	}
@@ -46,6 +46,22 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("apply schema: %w", err)
 	}
 	return nil
+}
+
+// Seed loads the starter catalogue from seed.sql and reports how many rows it
+// inserted. The statement is guarded by ON CONFLICT DO NOTHING, so running it
+// twice is harmless - but the caller still decides whether an already-populated
+// table should be touched, so a deleted movie stays deleted.
+func (s *Store) Seed(ctx context.Context) (int64, error) {
+	stmt, err := sqlFS.ReadFile("seed.sql")
+	if err != nil {
+		return 0, err
+	}
+	tag, err := s.pool.Exec(ctx, string(stmt))
+	if err != nil {
+		return 0, fmt.Errorf("apply seed: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (s *Store) Count(ctx context.Context) (int, error) {
