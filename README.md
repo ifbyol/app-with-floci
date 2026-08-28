@@ -32,8 +32,12 @@ means a **privileged Docker-in-Docker pod**.
 > target namespace.** The guardrail lives in Okteto's mutating webhook, and it
 > *strips* the flag rather than rejecting the pod — so without the exception the
 > pod starts and `dockerd` fails later with a confusing cgroup error rather than
-> an admission error. Background and the long-term fix:
-> [docs/okteto-implications.md](docs/okteto-implications.md).
+> an admission error. If the Floci pod is running but never becomes ready, check
+> that `securityContext.privileged` survived admission:
+>
+> ```bash
+> kubectl get pod -n <ns> floci-0 -o jsonpath='{.spec.containers[0].securityContext}'
+> ```
 
 ---
 
@@ -251,9 +255,6 @@ Two consequences shape the app:
 - The PVC still matters even without durable data: it caches the ~2.3 GB of
   engine images, which is the expensive part of a cold start.
 
-The full investigation, including how to make persistence work and what it would
-cost, is in [docs/okteto-implications.md](docs/okteto-implications.md).
-
 ---
 
 ## API
@@ -280,7 +281,6 @@ api/                 Go: provisioning, discovery, the three data paths, the
                      inspector endpoint. internal/store/schema.sql is the DDL,
                      internal/store/seed.sql the starter catalogue (150 movies).
 web/                 React + Vite + TypeScript: search, detail, add, emulator
-docs/                Okteto implications and the guardrail decision
 ```
 
 Compose cannot express `privileged`, which Docker-in-Docker requires, so Floci
