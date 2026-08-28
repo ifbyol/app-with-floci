@@ -17,6 +17,12 @@ The UI has a fourth page, **Emulator**, showing what each AWS control-plane call
 returned and where the app actually connected. If you only look at one page,
 look at that one.
 
+> **This branch exists to demonstrate a problem, not to recommend a pattern.**
+> All setup — the AWS resources, the schema, the seed data, the search index — is
+> owned by a one-shot provisioning job, and the application creates nothing. That
+> is the obvious way to build this, and it breaks the first time Floci restarts.
+> See [What a restart does](#what-a-restart-does).
+
 ---
 
 ## What to know before deploying
@@ -169,12 +175,18 @@ DescribeDomain             -> floci:9400   ->  OpenSearch  (direct, see below)
 `FLOCI_HOSTNAME=floci` is what makes the first two resolve: Floci advertises
 itself by that name, and it matches the Kubernetes Service name.
 
-The API also **creates** those three resources if they are missing, through the
-same SDK, then applies `internal/store/schema.sql`, loads
-`internal/store/seed.sql` when the table is empty, and rebuilds the OpenSearch
-index from whatever PostgreSQL holds. OpenSearch is never seeded directly, so one
-path covers both a first run and a restart that replaced the search node while
-leaving the database intact.
+The API **creates nothing**. A `provision` job runs to completion first — compose
+holds the api back with `depends_on: service_completed_successfully` — and that
+job owns everything: it waits for Floci, creates the three resources, waits until
+they actually answer, applies `provision/sql/schema.sql`, loads
+`provision/sql/seed.sql`, creates the index and bulk-loads it from PostgreSQL.
+
+It is an ordinary shell script with the AWS CLI and `psql`, deliberately knowing
+nothing about the application.
+
+If the API starts and any resource is missing it exits non-zero rather than
+waiting, because there is nothing to wait for: it cannot create what is absent,
+and the job that could has already finished.
 
 ### The one wrinkle
 
@@ -213,27 +225,31 @@ sidecar that binds them itself) and `9200–9299` (Lambda Runtime API, internal)
 
 ## What a restart does
 
-Floci runs with `FLOCI_STORAGE_MODE=memory`, so a restart of the Floci pod is a
-clean slate: new engine containers, no data. The API notices, re-creates the
-three AWS resources, re-applies the schema, re-seeds the catalogue and rebuilds
-the search index. No manual step, and the environment comes back working.
+Floci runs with `FLOCI_STORAGE_MODE=memory`, so restarting the Floci pod is a
+clean slate: new engine containers, and every resource it was told to create is
+gone. Okteto namespaces scale to zero, so this happens routinely.
 
-**Data does not survive a restart.** Treat anything you add through the UI as
-disposable. Okteto namespaces scale to zero, so this happens routinely rather
-than exceptionally.
+**The application does not come back.** The provisioning job already ran and is
+`Complete`, so nothing re-creates the resources, and the API crash-loops:
 
-That is a deliberate choice, and it is worth understanding why, because it is a
-property of Floci rather than of this app. With a persistent storage mode Floci
-restores its *resource metadata* across a restart but does not re-create all of
-the engine *containers* to match. The control plane then reports a service as
-`available` while nothing is listening behind it, which is a much worse failure
-than an empty database: it looks healthy and hangs. Memory mode trades
-durability for a restart that is deterministic.
+```
+api    0/1  CrashLoopBackOff  restarts=6
+job    Complete               succeeded=1
 
-Two consequences shape the app:
+api log:  cannot serve  error="startup: not provisioned:
+          RDS (flociflix-db: ... 404), ElastiCache (... 404),
+          OpenSearch (... 409) - run the provisioning job"
+```
 
-- The API **supervises** its connections rather than connecting once. Floci
-  replaces engines behind the *same* addresses, so an open socket proves nothing
-  — every 10 seconds it checks that its schema and search index still exist.
-- The PVC still matters even without durable data: it caches the ~2.3 GB of
-  engine images, which is the expensive part of a cold start.
+Kubernetes considers provisioning done. Floci holds zero instances, zero cache
+groups and zero domains. Both are telling the truth, and the environment is dead
+until a human redeploys so the job runs again.
+
+That is the point of this branch. The failure is not a bug in the job — the job
+is correct and idempotent. It is that **a one-shot job cannot own the lifecycle
+of something that forgets.** Floci's in-memory state and a Job's run-once
+semantics are a bad match, and no amount of care inside the job fixes it.
+
+The alternative is for the application to own provisioning itself, so that
+whatever supervises it can also repair it. That version recovers unattended in
+about 85 seconds and is what `main` does.

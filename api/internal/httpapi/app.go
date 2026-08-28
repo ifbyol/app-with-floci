@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,15 +18,13 @@ import (
 	"github.com/okteto/app-with-floci/api/internal/store"
 )
 
-// App serves HTTP straight away, connects to its backing services in the
-// background, and then keeps verifying that the services it connected to are
-// still the ones holding its data.
+// App is a pure consumer of infrastructure it does not create.
 //
-// Serving before connecting is deliberate: provisioning OpenSearch can take
-// minutes on a cold image cache, and a process that refused connections until
-// then would fail its Kubernetes probes and be restarted in a loop. Instead
-// /api/health and /api/aws/status answer immediately, so provisioning is
-// observable while it happens.
+// The provisioning job owns the AWS resources, the schema, the seed data and the
+// search index; this process only discovers where they are and connects. That
+// split is the point of this branch: it shows what an application looks like
+// when setup is entirely somebody else's problem, and what happens to it when
+// that somebody has already finished and gone home.
 type App struct {
 	cfg  *config.Config
 	disc *awsdisc.Discoverer
@@ -43,44 +42,35 @@ func NewApp(cfg *config.Config) *App {
 	return &App{cfg: cfg, disc: awsdisc.New(cfg)}
 }
 
-// Supervise owns the connection lifecycle for the whole process lifetime.
+// Supervise connects once and then watches. It returns an error instead of
+// retrying, and the caller exits the process.
 //
-// Connecting once is not sufficient here. When Floci restarts it provisions
-// brand new engine containers behind the same proxy addresses, so this process
-// stays "connected" to a PostgreSQL that no longer has its schema and an
-// OpenSearch node with no index - and nothing about the TCP connection looks
-// wrong. Okteto namespaces scale to zero, which makes that routine rather than
-// exceptional, so the check has to be semantic: is our data still there?
-func (a *App) Supervise(ctx context.Context) {
+// There is nothing to retry for. The application cannot create what is missing,
+// and the job that could has already run to completion, so waiting would only
+// hide the problem behind a pod that looks healthy. Failing turns it into a
+// CrashLoopBackOff, which is at least visible.
+func (a *App) Supervise(ctx context.Context) error {
 	const interval = 10 * time.Second
 
-	for {
-		if !a.ready.Load() {
-			if err := a.connect(ctx); err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				msg := err.Error()
-				a.bootErr.Store(&msg)
-				slog.Error("connect failed, will retry", "error", err)
-			} else {
-				a.bootErr.Store(nil)
-				a.ready.Store(true)
-				slog.Info("connected - all three backing services ready")
-			}
-		} else if err := a.verify(ctx); err != nil {
-			// Never spin: dropping ready here means the next tick reconnects.
-			slog.Warn("backing services were replaced underneath us; reconnecting",
-				"error", err)
-			msg := err.Error()
-			a.bootErr.Store(&msg)
-			a.ready.Store(false)
-		}
+	if err := a.connect(ctx); err != nil {
+		return fmt.Errorf("startup: %w", err)
+	}
+	a.ready.Store(true)
+	slog.Info("connected - all three backing services ready")
 
+	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-time.After(interval):
+		}
+
+		if err := a.verify(ctx); err != nil {
+			a.ready.Store(false)
+			msg := err.Error()
+			a.bootErr.Store(&msg)
+			return fmt.Errorf("backing services are no longer usable, and nothing "+
+				"in this deployment re-provisions them: %w", err)
 		}
 	}
 }
@@ -109,34 +99,31 @@ func (a *App) verify(ctx context.Context) error {
 	return nil
 }
 
-// connect discovers endpoints, connects, migrates and seeds. Any previous
-// generation of connections is closed first.
+// connect discovers the endpoints and opens connections. It creates nothing: no
+// resources, no schema, no index. A single probe rather than a poll, because the
+// job has already finished by the time this runs - if anything is missing it is
+// missing for good.
 func (a *App) connect(ctx context.Context) error {
 	a.closeDeps()
 
-	timeout := time.Duration(a.cfg.ReadyTimeoutSeconds) * time.Second
-	slog.Info("provisioning and discovering via Floci control plane",
-		"endpoint", a.cfg.FlociEndpoint, "timeout", timeout)
+	slog.Info("discovering endpoints via Floci control plane", "endpoint", a.cfg.FlociEndpoint)
+	snap := a.disc.Probe(ctx)
 
-	// Create anything missing before waiting for it. Idempotent, so this is also
-	// what re-provisions after a Floci restart wiped its in-memory state.
-	if err := a.disc.Ensure(ctx); err != nil {
-		return err
-	}
-
-	snap, err := a.disc.WaitReady(ctx, timeout)
-	if err != nil {
-		return err
+	if !snap.Ready {
+		var missing []string
+		for _, s := range snap.Services {
+			if !s.Ready {
+				missing = append(missing, fmt.Sprintf("%s (%s: %s)", s.Service, s.Resource, s.Status))
+			}
+		}
+		return fmt.Errorf("not provisioned: %s - run the provisioning job",
+			strings.Join(missing, ", "))
 	}
 	slog.Info("endpoints discovered",
 		"postgres", snap.DB.Addr(), "valkey", snap.Cache.Addr(), "opensearch", snap.SearchURL)
 
 	st, err := store.New(ctx, a.cfg.DSN(snap.DB.Host, snap.DB.Port))
 	if err != nil {
-		return err
-	}
-	if err := st.Migrate(ctx); err != nil {
-		st.Close()
 		return err
 	}
 
@@ -152,17 +139,24 @@ func (a *App) connect(ctx context.Context) error {
 		_ = ch.Close()
 		return err
 	}
-	if err := se.EnsureIndex(ctx); err != nil {
+	// The index is the job's to create. If it is absent the catalogue was never
+	// provisioned, and searching would return an error on every request.
+	if err := se.IndexExists(ctx); err != nil {
 		st.Close()
 		_ = ch.Close()
-		return err
+		return fmt.Errorf("search index missing - run the provisioning job: %w", err)
 	}
 
 	a.mu.Lock()
 	a.store, a.cache, a.search = st, ch, se
 	a.mu.Unlock()
 
-	return a.seed(ctx, st, se)
+	n, err := st.Count(ctx)
+	if err != nil {
+		return fmt.Errorf("catalogue unreadable - run the provisioning job: %w", err)
+	}
+	slog.Info("catalogue ready", "movies", n)
+	return nil
 }
 
 func (a *App) deps() (*store.Store, *cache.Cache, *search.Search) {
@@ -186,45 +180,3 @@ func (a *App) closeDeps() {
 }
 
 func (a *App) Close() { a.closeDeps() }
-
-// seed loads the starter catalogue into PostgreSQL when it is empty, then
-// rebuilds the search index from whatever PostgreSQL holds.
-//
-// The rows live in store/seed.sql rather than in Go: it is data, it is easier to
-// extend, and it keeps PostgreSQL unambiguously the source of truth. OpenSearch
-// is never seeded directly - reindexAll derives it - which means one code path
-// covers both a first run and a Floci restart that replaced the search node
-// while leaving the database intact.
-// reindexAll keeps OpenSearch consistent with PostgreSQL. The search index lives
-// in a container whose lifecycle is independent of the database's, so the two
-// can drift - most obviously when only one of them is replaced.
-func (a *App) seed(ctx context.Context, st *store.Store, se *search.Search) error {
-	n, err := st.Count(ctx)
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		inserted, err := st.Seed(ctx)
-		if err != nil {
-			return err
-		}
-		slog.Info("seeded catalogue from seed.sql", "movies", inserted)
-	} else {
-		slog.Info("catalogue already populated", "movies", n)
-	}
-	return a.reindexAll(ctx, st, se)
-}
-
-func (a *App) reindexAll(ctx context.Context, st *store.Store, se *search.Search) error {
-	movies, err := st.All(ctx)
-	if err != nil {
-		return err
-	}
-	for i := range movies {
-		if err := se.Index(ctx, &movies[i]); err != nil {
-			return err
-		}
-	}
-	slog.Info("reindexed catalogue into OpenSearch", "movies", len(movies))
-	return se.Refresh(ctx)
-}

@@ -21,6 +21,7 @@
 # ---- image build contexts ----
 !api
 !web
+!provision
 
 # ---- ...minus the parts of those that must never be uploaded ----
 web/node_modules
@@ -33,6 +34,7 @@ web/dist
 # image, so the build contexts are dead weight here.
 api
 web
+provision
 
 [test]
 # No `test` section in the manifest yet. When one is added, whatever it needs

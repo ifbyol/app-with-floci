@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/url"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -100,36 +99,6 @@ func (d *Discoverer) Probe(ctx context.Context) *Snapshot {
 	snap.DB, snap.Cache, snap.SearchURL = db, cache, search
 	snap.Ready = db.OK() && cache.OK() && search != ""
 	return snap
-}
-
-// WaitReady polls until all three resources report usable endpoints.
-//
-// This is not defensive padding: OpenSearch genuinely takes a while, because
-// CreateDomain pulls a ~1.2GB image and the node then has to reach green.
-func (d *Discoverer) WaitReady(ctx context.Context, timeout time.Duration) (*Snapshot, error) {
-	deadline := time.Now().Add(timeout)
-	var last *Snapshot
-
-	for {
-		last = d.Probe(ctx)
-		if last.Ready {
-			return last, nil
-		}
-		for _, s := range last.Services {
-			if !s.Ready {
-				slog.Info("waiting for backing service",
-					"service", s.Service, "resource", s.Resource, "status", s.Status)
-			}
-		}
-		if time.Now().After(deadline) {
-			return last, fmt.Errorf("backing services not ready after %s", timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return last, ctx.Err()
-		case <-time.After(3 * time.Second):
-		}
-	}
 }
 
 func (d *Discoverer) probeRDS(ctx context.Context, snap *Snapshot) Endpoint {
@@ -261,106 +230,6 @@ func describeErr(err error, fallback string) string {
 		return err.Error()[:120] + "..."
 	}
 	return err.Error()
-}
-
-// Ensure creates the three resources if they are missing.
-//
-// This lives in the app rather than in Floci's init hooks on purpose. Hooks
-// would have to exist twice - mounted from the repo locally, inlined into the
-// Kubernetes manifest in the cluster - and Floci's hook runner is fail-fast, so
-// a slow CreateDomain can shut the emulator down instead of just being slow.
-// Doing it here keeps one copy of the logic, in a language with types, and lets
-// the supervisor's existing retry loop absorb the slowness.
-//
-// Every step is idempotent: describe first, create only when absent.
-func (d *Discoverer) Ensure(ctx context.Context) error {
-	if err := d.ensureDBInstance(ctx); err != nil {
-		return err
-	}
-	if err := d.ensureCacheGroup(ctx); err != nil {
-		return err
-	}
-	return d.ensureSearchDomain(ctx)
-}
-
-func (d *Discoverer) ensureDBInstance(ctx context.Context) error {
-	_, err := d.rdsc.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
-		DBInstanceIdentifier: aws.String(d.cfg.DBInstanceID),
-	})
-	if err == nil {
-		return nil
-	}
-
-	slog.Info("creating RDS instance", "id", d.cfg.DBInstanceID)
-	_, err = d.rdsc.CreateDBInstance(ctx, &rds.CreateDBInstanceInput{
-		DBInstanceIdentifier: aws.String(d.cfg.DBInstanceID),
-		DBInstanceClass:      aws.String("db.t3.micro"),
-		Engine:               aws.String("postgres"),
-		AllocatedStorage:     aws.Int32(20),
-		MasterUsername:       aws.String(d.cfg.DBUser),
-		MasterUserPassword:   aws.String(d.cfg.DBPassword),
-		DBName:               aws.String(d.cfg.DBName),
-	})
-	if err != nil && !alreadyExists(err) {
-		return fmt.Errorf("create db instance: %w", err)
-	}
-	return nil
-}
-
-func (d *Discoverer) ensureCacheGroup(ctx context.Context) error {
-	_, err := d.ecc.DescribeReplicationGroups(ctx, &elasticache.DescribeReplicationGroupsInput{
-		ReplicationGroupId: aws.String(d.cfg.CacheGroupID),
-	})
-	if err == nil {
-		return nil
-	}
-
-	slog.Info("creating ElastiCache replication group", "id", d.cfg.CacheGroupID)
-	_, err = d.ecc.CreateReplicationGroup(ctx, &elasticache.CreateReplicationGroupInput{
-		ReplicationGroupId:          aws.String(d.cfg.CacheGroupID),
-		ReplicationGroupDescription: aws.String("Floci Flix read cache"),
-	})
-	if err != nil && !alreadyExists(err) {
-		return fmt.Errorf("create replication group: %w", err)
-	}
-	return nil
-}
-
-func (d *Discoverer) ensureSearchDomain(ctx context.Context) error {
-	_, err := d.osc.DescribeDomain(ctx, &opensearch.DescribeDomainInput{
-		DomainName: aws.String(d.cfg.SearchDomain),
-	})
-	if err == nil {
-		return nil
-	}
-
-	slog.Info("creating OpenSearch domain", "name", d.cfg.SearchDomain,
-		"note", "Floci pulls a ~1.2GB image synchronously; this can take minutes on a cold cache")
-
-	_, err = d.osc.CreateDomain(ctx, &opensearch.CreateDomainInput{
-		DomainName:    aws.String(d.cfg.SearchDomain),
-		EngineVersion: aws.String("OpenSearch_2.11"),
-	})
-	if err != nil && !alreadyExists(err) {
-		// Not fatal: on a cold image cache this call routinely outlives its
-		// deadline while Floci keeps provisioning in the background. WaitReady
-		// polls DescribeDomain, so the domain is still picked up when it lands.
-		slog.Warn("create domain did not return cleanly; continuing to poll", "error", err)
-	}
-	return nil
-}
-
-// alreadyExists treats a duplicate-resource fault as success, so a concurrent
-// or repeated Ensure is harmless.
-func alreadyExists(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "alreadyexists") ||
-		strings.Contains(msg, "already exists") ||
-		strings.Contains(msg, "alreadyexistsfault") ||
-		strings.Contains(msg, "duplicate")
 }
 
 // hostResolves reports whether the host in a URL can be resolved from this

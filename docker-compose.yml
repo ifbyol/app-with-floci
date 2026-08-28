@@ -1,8 +1,35 @@
 services:
+  # Creates the AWS resources, applies the schema, loads the seed data and builds
+  # the search index, then exits. The API will not start until it succeeds.
+  #
+  # It waits for Floci itself, because Floci is not a compose service - it comes
+  # from k8s/floci.yaml - so no depends_on can express that ordering.
+  provision:
+    build:
+      context: ./provision
+    restart: never                   # -> Okteto renders this as a Job
+    environment:
+      FLOCI_ENDPOINT: ${FLOCI_ENDPOINT:-http://floci:4566}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      DB_INSTANCE_ID: ${DB_INSTANCE_ID:-flociflix-db}
+      CACHE_GROUP_ID: ${CACHE_GROUP_ID:-flociflix-cache}
+      SEARCH_DOMAIN: ${SEARCH_DOMAIN:-flociflix-search}
+      SEARCH_PUBLISHED_PORT: ${SEARCH_PUBLISHED_PORT:-9400}
+      APP_DB_USER: ${APP_DB_USER:-appuser}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-floci-emulator-not-a-secret}
+      APP_DB_NAME: ${APP_DB_NAME:-flociflix}
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 500m, memory: 256Mi}
+
   api:
     build:
       context: ./api
       target: runtime
+    # The API creates nothing, so it cannot start before the job has finished.
+    depends_on:
+      provision:
+        condition: service_completed_successfully
     ports:
       - "8080"                       # private: only web talks to it
     environment:

@@ -1,0 +1,15 @@
+{
+  "settings": { "number_of_shards": 1, "number_of_replicas": 0 },
+  "mappings": {
+    "properties": {
+      "id":        { "type": "keyword" },
+      "title":     { "type": "text", "fields": { "raw": { "type": "keyword" } } },
+      "year":      { "type": "integer" },
+      "genre":     { "type": "keyword" },
+      "director":  { "type": "text", "fields": { "raw": { "type": "keyword" } } },
+      "synopsis":  { "type": "text" },
+      "rating":    { "type": "float" },
+      "createdAt": { "type": "date" }
+    }
+  }
+}

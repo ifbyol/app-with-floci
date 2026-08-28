@@ -61,37 +61,6 @@ func (s *Search) IndexExists(ctx context.Context) error {
 	return nil
 }
 
-// mapping keeps genre a keyword so it can be aggregated and filtered exactly,
-// while title, director and synopsis stay analysed for full-text matching.
-// Replicas are zero because Floci runs a single node - otherwise the cluster
-// would sit permanently yellow.
-const mapping = `{
-  "settings": { "number_of_shards": 1, "number_of_replicas": 0 },
-  "mappings": {
-    "properties": {
-      "id":        { "type": "keyword" },
-      "title":     { "type": "text", "fields": { "raw": { "type": "keyword" } } },
-      "year":      { "type": "integer" },
-      "genre":     { "type": "keyword" },
-      "director":  { "type": "text", "fields": { "raw": { "type": "keyword" } } },
-      "synopsis":  { "type": "text" },
-      "rating":    { "type": "float" },
-      "createdAt": { "type": "date" }
-    }
-  }
-}`
-
-func (s *Search) EnsureIndex(ctx context.Context) error {
-	_, err := s.c.Indices.Create(ctx, opensearchapi.IndicesCreateReq{
-		Index: s.index,
-		Body:  strings.NewReader(mapping),
-	})
-	if err != nil && !strings.Contains(err.Error(), "resource_already_exists_exception") {
-		return fmt.Errorf("create index: %w", err)
-	}
-	return nil
-}
-
 func (s *Search) Index(ctx context.Context, m *model.Movie) error {
 	raw, err := json.Marshal(m)
 	if err != nil {
