@@ -127,12 +127,6 @@ okteto deploy --var APP_DB_PASSWORD=... --var SEARCH_DOMAIN=...
 Floci's own settings (`FLOCI_*`: hostnames, proxy port ranges, storage mode) live
 in `k8s/floci.yaml`, because that is the manifest that runs it.
 
-> These values are ordinary environment variables and end up in the pod spec as
-> plaintext, readable by anyone with namespace read access. That is acceptable
-> for an in-memory emulator database that is recreated on every restart and is
-> never reachable from outside the namespace — but do not point them at anything
-> real.
-
 ---
 
 ## How a request flows
