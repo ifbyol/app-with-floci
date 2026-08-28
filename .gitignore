@@ -38,3 +38,7 @@ web/dist/
 
 # Local Floci state
 floci-data/
+
+# Working notes for AI-assisted sessions: reasoning, assumptions and
+# investigation history. Not documentation for users of this repo.
+.claude/
