@@ -28,11 +28,6 @@ That works on a laptop, where Floci uses the host's Docker socket. Kubernetes ha
 no socket to share, so in a cluster Floci has to bring its own daemon — which
 means a **privileged Docker-in-Docker pod**.
 
-> **This deployment needs Okteto's privileged-container guardrail relaxed for the
-> target namespace.** Okteto's mutating webhook strips the flag rather than
-> rejecting the pod, so without the exception the pod starts and `dockerd` fails
-> later instead of failing admission.
-
 ---
 
 ## How it is deployed
