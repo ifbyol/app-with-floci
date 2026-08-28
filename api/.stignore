@@ -1,0 +1,21 @@
+# Syncthing ignore for `okteto up api`. Governs file synchronisation only -
+# .oktetoignore at the repo root covers what remote deploy uploads.
+#
+# The module cache lives in the volume declared in okteto.yaml (/go/pkg/mod), so
+# nothing here needs to carry dependencies.
+.git
+
+# Compiled output
+*.exe
+*.so
+*.dylib
+*.test
+*.out
+__debug_bin
+vendor
+
+# Editor and OS noise
+.DS_Store
+.idea
+.vscode
+*.swp

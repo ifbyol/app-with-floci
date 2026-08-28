@@ -1,0 +1,46 @@
+# Floci Flix on Okteto.
+#
+# docker-compose.yml is the application definition. This file exists for exactly
+# one reason: Floci's RDS, ElastiCache and OpenSearch implementations start real
+# engine containers through a Docker daemon, which in a pod means a privileged
+# Docker-in-Docker container. So Floci comes from a manifest and everything else
+# from compose.
+
+name: floci-flix
+
+deploy:
+  commands:
+    - name: Floci (privileged DinD - not expressible in compose)
+      command: kubectl apply -n ${OKTETO_NAMESPACE} -f k8s/floci.yaml
+  compose: docker-compose.yml
+
+dev:
+  api:
+    image: golang:1.26-alpine
+    workdir: /app
+    command: go run ./cmd/api
+    sync:
+      - api:/app
+    forward:
+      - 8080:8080
+    environment:
+      LOG_LEVEL: debug
+    volumes:
+      - /go/pkg/mod
+    persistentVolume:
+      enabled: true
+
+  web:
+    image: node:18-alpine
+    workdir: /app
+    command: sh -c "npm install && npm run dev -- --port 8080"
+    sync:
+      - web:/app
+    forward:
+      - 5173:8080
+    environment:
+      API_PROXY: http://api:8080
+    volumes:
+      - /app/node_modules
+    persistentVolume:
+      enabled: true

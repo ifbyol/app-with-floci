@@ -1,0 +1,39 @@
+# Controls what gets uploaded when Okteto runs deploy/destroy/test with remote
+# execution. The rules are written into a .dockerignore for the runner image, so
+# this is .dockerignore syntax - not .gitignore. Note this is a different thing
+# from .stignore, which governs `okteto up` file synchronisation.
+#
+# Deliberately an allow-list: exclude everything, then name what the commands
+# actually need. A deny-list quietly grows stale, and the failure mode is a slow
+# upload nobody notices.
+#
+# Sections are additive and later rules win: `deploy` reads [root + deploy],
+# `destroy` reads [root + destroy], `okteto test` reads [root + test + test.NAME].
+
+# ---- exclude everything ----
+*
+
+# ---- the manifest and what its commands reference ----
+!okteto.yaml
+!docker-compose.yml
+!k8s
+
+# ---- image build contexts ----
+!api
+!web
+
+# ---- ...minus the parts of those that must never be uploaded ----
+web/node_modules
+web/dist
+**/*.tsbuildinfo
+**/.DS_Store
+
+[destroy]
+# `okteto destroy` only runs kubectl against k8s/floci.yaml. It never builds an
+# image, so the build contexts are dead weight here.
+api
+web
+
+[test]
+# No `test` section in the manifest yet. When one is added, whatever it needs
+# goes here - the root allow-list already covers both build contexts.

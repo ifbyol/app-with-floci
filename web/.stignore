@@ -1,0 +1,22 @@
+# Syncthing ignore for `okteto up web`. Governs file synchronisation only -
+# .oktetoignore at the repo root covers what remote deploy uploads.
+#
+# A deny-list here, not an allow-list: the whole source tree is meant to sync, so
+# the job is naming the things that must not. node_modules is the big one -
+# okteto.yaml mounts it as a volume inside the dev container, and syncing tens of
+# thousands of local files over it would be slow and would fight the volume.
+.git
+
+# Dependencies - provided by the volume declared in okteto.yaml
+node_modules
+
+# Build output and caches
+dist
+.vite
+*.tsbuildinfo
+
+# Editor and OS noise
+.DS_Store
+.idea
+.vscode
+*.swp

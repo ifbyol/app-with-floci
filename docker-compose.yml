@@ -1,0 +1,48 @@
+services:
+  api:
+    build:
+      context: ./api
+      target: runtime
+    ports:
+      - "8080"                       # private: only web talks to it
+    environment:
+      AWS_ENDPOINT_URL: ${FLOCI_ENDPOINT:-http://floci:4566}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      DB_INSTANCE_ID: ${DB_INSTANCE_ID:-flociflix-db}
+      CACHE_GROUP_ID: ${CACHE_GROUP_ID:-flociflix-cache}
+      SEARCH_DOMAIN: ${SEARCH_DOMAIN:-flociflix-search}
+      # The API provisions these three resources itself and works out the
+      # OpenSearch address by checking whether Floci's advertised Docker name
+      # resolves - so nothing here differs between laptop and cluster.
+      # Set OPENSEARCH_ENDPOINT_OVERRIDE only to force a specific address.
+      OPENSEARCH_ENDPOINT_OVERRIDE: ${OPENSEARCH_ENDPOINT_OVERRIDE:-}
+      APP_DB_USER: ${APP_DB_USER:-appuser}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-floci-emulator-not-a-secret}
+      APP_DB_NAME: ${APP_DB_NAME:-flociflix}
+    healthcheck:
+      # HTTP probe rather than a command: the runtime image is distroless and
+      # has no shell. /api/health answers as soon as the process is up, which is
+      # deliberate - the API must be reachable while it waits for OpenSearch.
+      http:
+        path: /api/health
+        port: 8080
+      x-okteto-liveness: true
+      x-okteto-readiness: true
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 500m, memory: 256Mi}
+
+  web:
+    build:
+      context: ./web
+      target: runtime
+    ports:
+      - "8080:8080"                  # mapped -> Okteto publishes a public endpoint
+    healthcheck:
+      http:
+        path: /
+        port: 8080
+      x-okteto-readiness: true
+    resources:
+      requests: {cpu: 20m, memory: 32Mi}
+      limits: {cpu: 200m, memory: 128Mi}

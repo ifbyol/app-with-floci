@@ -1,0 +1,192 @@
+# Floci, carried by a single privileged Docker-in-Docker container.
+#
+# This is the only Kubernetes manifest in the repo, and it exists only because
+# Okteto's compose support parses `privileged` solely to warn about it. Floci's
+# RDS, ElastiCache and OpenSearch implementations start real engine containers
+# through a Docker daemon, so the daemon has to come along.
+#
+# Floci runs as a container *inside* that daemon rather than as a sibling
+# Kubernetes container: it resolves the OpenSearch node by Docker container name,
+# and only a container attached to the network can use Docker's embedded
+# resolver. Every port it publishes lands on the pod IP, because dockerd binds
+# inside the pod's network namespace - which is why one ordinary Service exposes
+# all of it, including the OpenSearch port that Floci itself never listens on.
+#
+# Nothing here needs templating: the application provisions its own RDS
+# instance, cache group and search domain through Floci's AWS API.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: floci
+  labels: {app: floci}
+spec:
+  serviceName: floci
+  replicas: 1
+  selector:
+    matchLabels: {app: floci}
+  template:
+    metadata:
+      labels: {app: floci}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: floci
+          image: docker:28-dind
+          # The one field compose cannot express, and the reason this file
+          # exists. Okteto's mutating webhook strips it unless the guardrail is
+          # relaxed for the namespace - and when it does, the pod still starts
+          # and dockerd fails later with a cgroup error rather than an
+          # admission error.
+          securityContext:
+            privileged: true
+          env:
+            # Floci reaches the daemon over the unix socket, so no TCP listener
+            # and no TLS setup is needed.
+            - {name: DOCKER_TLS_CERTDIR, value: ""}
+            - {name: DOCKER_HOST, value: "unix:///var/run/docker.sock"}
+            - {name: FLOCI_IMAGE, value: "floci/floci:1.7.0-compat"}
+            # Advertised as the Kubernetes Service name, so the endpoints Floci
+            # hands back to the app resolve through normal cluster DNS.
+            - {name: FLOCI_HOSTNAME, value: "floci"}
+            - {name: FLOCI_SERVICES_RDS_ENDPOINT_HOST, value: "floci"}
+            # Narrowed to three ports each: a Service cannot express ranges, so
+            # every port has to be enumerated below. Widen both together.
+            - {name: FLOCI_SERVICES_RDS_PROXY_BASE_PORT, value: "7001"}
+            - {name: FLOCI_SERVICES_RDS_PROXY_MAX_PORT, value: "7003"}
+            - {name: FLOCI_SERVICES_ELASTICACHE_PROXY_BASE_PORT, value: "6379"}
+            - {name: FLOCI_SERVICES_ELASTICACHE_PROXY_MAX_PORT, value: "6381"}
+            - {name: FLOCI_SERVICES_OPENSEARCH_PROXY_BASE_PORT, value: "9400"}
+            - {name: FLOCI_SERVICES_OPENSEARCH_PROXY_MAX_PORT, value: "9402"}
+            # In-memory on purpose. With a persistent mode Floci restores
+            # resource metadata across a restart but does not reconcile the
+            # engine containers against it, so the control plane reports
+            # endpoints with nothing behind them. Memory mode makes a restart
+            # deterministic; the app re-provisions and re-seeds.
+            - {name: FLOCI_STORAGE_MODE, value: "memory"}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              log() { echo "[boot] $*"; }
+
+              log "starting dockerd"
+              dockerd-entrypoint.sh dockerd >/var/log/dockerd.log 2>&1 &
+
+              log "waiting for the daemon"
+              i=0
+              until docker info >/dev/null 2>&1; do
+                  i=$((i + 1))
+                  if [ "$i" -gt 150 ]; then
+                      log "FATAL: dockerd never became ready. Last 40 lines:"
+                      tail -40 /var/log/dockerd.log || true
+                      log "If this pod was admitted but dockerd cannot start, check that"
+                      log "securityContext.privileged survived admission - Okteto's mutating"
+                      log "webhook strips it by default and the pod still starts."
+                      exit 1
+                  fi
+                  sleep 1
+              done
+              log "daemon ready: $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)"
+
+              # A user-defined network is what gives containers name resolution;
+              # the default bridge has none, and Floci needs to resolve the
+              # OpenSearch container by name.
+              docker network inspect floci-net >/dev/null 2>&1 || docker network create floci-net >/dev/null
+              log "network floci-net ready"
+
+              # Pre-pull so the app's first CreateDomain is not waiting on a
+              # 1.2GB download. These land on the PVC, so only the first boot
+              # pays for it.
+              for img in "$FLOCI_IMAGE" postgres:16.3-alpine valkey/valkey:8 opensearchproject/opensearch:2.11.1; do
+                  if docker image inspect "$img" >/dev/null 2>&1; then
+                      log "cached: $img"
+                  else
+                      log "pulling: $img"
+                      docker pull --quiet "$img" >/dev/null || log "WARNING: pull failed for $img; Floci will retry on demand"
+                  fi
+              done
+
+              docker rm -f floci >/dev/null 2>&1 || true
+
+              # Foreground, so Floci's logs are the pod's logs and its exit is
+              # the container's exit. -u root lets Floci's entrypoint join the
+              # Docker socket's group before dropping to uid 1001.
+              log "starting floci ($FLOCI_IMAGE)"
+              exec docker run --rm --name floci \
+                  --network floci-net \
+                  -u root \
+                  -v /var/run/docker.sock:/var/run/docker.sock \
+                  -p 4566:4566 \
+                  -p 7001-7003:7001-7003 \
+                  -p 6379-6381:6379-6381 \
+                  -e FLOCI_HOSTNAME \
+                  -e FLOCI_SERVICES_RDS_ENDPOINT_HOST \
+                  -e FLOCI_SERVICES_RDS_PROXY_BASE_PORT \
+                  -e FLOCI_SERVICES_RDS_PROXY_MAX_PORT \
+                  -e FLOCI_SERVICES_ELASTICACHE_PROXY_BASE_PORT \
+                  -e FLOCI_SERVICES_ELASTICACHE_PROXY_MAX_PORT \
+                  -e FLOCI_SERVICES_OPENSEARCH_PROXY_BASE_PORT \
+                  -e FLOCI_SERVICES_OPENSEARCH_PROXY_MAX_PORT \
+                  -e FLOCI_STORAGE_MODE \
+                  "$FLOCI_IMAGE"
+          ports:
+            - {name: aws-api, containerPort: 4566}
+            # 9400-9402 are bound by the OpenSearch container Floci starts, not
+            # by this one, so they are not declared here. The Service still
+            # routes to them: a Service may target an undeclared port.
+          volumeMounts:
+            - {name: docker-storage, mountPath: /var/lib/docker}
+          readinessProbe:
+            # The same endpoint the Floci image's own HEALTHCHECK uses.
+            httpGet: {path: /_floci/health, port: 4566}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 120     # first boot pulls ~2.3GB before Floci starts
+          livenessProbe:
+            # dockerd is a background process, so Kubernetes cannot supervise it
+            # directly. This catches a dead *or wedged* daemon.
+            exec: {command: ["docker", "info"]}
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            # Okteto's LimitRange caps a container at 2 CPU / 8Gi. Measured idle
+            # use of the four inner containers is ~1.6GiB, dominated by
+            # OpenSearch at ~1.45GiB.
+            limits: {cpu: "2", memory: 6Gi}
+  volumeClaimTemplates:
+    - metadata:
+        name: docker-storage
+        labels: {app: floci}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 25Gi}
+---
+# One Service fronts everything, because every port lands on the pod IP: Floci's
+# own listeners and the ports the engine containers publish inside DinD.
+apiVersion: v1
+kind: Service
+metadata:
+  name: floci
+  labels: {app: floci}
+spec:
+  type: ClusterIP
+  selector: {app: floci}
+  ports:
+    - {name: aws-api, port: 4566, targetPort: 4566}
+    # RDS - proxied inside Floci.
+    - {name: rds-1, port: 7001, targetPort: 7001}
+    - {name: rds-2, port: 7002, targetPort: 7002}
+    - {name: rds-3, port: 7003, targetPort: 7003}
+    # ElastiCache - proxied inside Floci.
+    - {name: cache-1, port: 6379, targetPort: 6379}
+    - {name: cache-2, port: 6380, targetPort: 6380}
+    - {name: cache-3, port: 6381, targetPort: 6381}
+    # OpenSearch - published by the engine container itself, so this reaches the
+    # node directly rather than going through Floci.
+    - {name: search-1, port: 9400, targetPort: 9400}
+    - {name: search-2, port: 9401, targetPort: 9401}
+    - {name: search-3, port: 9402, targetPort: 9402}
