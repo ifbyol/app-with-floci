@@ -1,22 +1,3 @@
-# Floci Flix - the whole application definition.
-#
-# Okteto turns this into Deployments and Services directly. There are no
-# Kubernetes manifests for the app and no ConfigMaps: configuration lives here,
-# and any value can come from an Okteto variable (an admin variable, or
-# `okteto deploy --var NAME=value`).
-#
-# Ports are declared bare ("8080"), which keeps them on the cluster's private
-# network. A "host:container" mapping makes Okteto publish a public HTTPS
-# endpoint - wanted only for the web UI.
-#
-# Floci itself is not here. It needs a privileged Docker-in-Docker container, and
-# `privileged` is one of the few compose fields Okteto parses only to warn about,
-# so it comes from k8s/floci.yaml instead. The api service reaches it at
-# floci:4566 either way.
-#
-# The environment name lives in okteto.yaml, which takes precedence over a
-# `name` here - one source of truth.
-
 services:
   api:
     build:
