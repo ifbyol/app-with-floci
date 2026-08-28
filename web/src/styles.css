@@ -144,6 +144,12 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
 @media (max-width: 32rem) { .two { grid-template-columns: 1fr; } }
 
+.pager {
+  display: flex; align-items: center; justify-content: center;
+  gap: 1rem; margin-top: 1.5rem;
+}
+.pager .meta { font-variant-numeric: tabular-nums; }
+
 .trend { display: flex; justify-content: space-between; font-size: .88rem; padding: .3rem 0; border-bottom: 1px solid var(--rule); }
 .trend:last-child { border-bottom: none; }
 .trend .n { color: var(--muted); font-variant-numeric: tabular-nums; }

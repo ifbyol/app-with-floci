@@ -20,6 +20,8 @@ export interface Facet {
 
 export interface SearchResults {
   total: number;
+  from: number;
+  size: number;
   tookMillis: number;
   hits: Hit[];
   genres: Facet[];
@@ -87,10 +89,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  search: (q: string, genre: string) => {
+  search: (q: string, genre: string, from = 0, size = 20) => {
     const p = new URLSearchParams();
     if (q) p.set("q", q);
     if (genre) p.set("genre", genre);
+    if (from) p.set("from", String(from));
+    p.set("size", String(size));
     return request<SearchResults>(`/api/movies?${p}`);
   },
   detail: (id: string) => request<MovieDetail>(`/api/movies/${encodeURIComponent(id)}`),

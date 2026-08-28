@@ -3,9 +3,12 @@ import { Link } from "react-router-dom";
 import { api, type SearchResults, type Trend } from "../lib/api";
 import { useDebounced } from "../lib/useDebounced";
 
+const PAGE_SIZE = 20;
+
 export default function Search() {
   const [query, setQuery] = useState("");
   const [genre, setGenre] = useState("");
+  const [page, setPage] = useState(0);
   const [results, setResults] = useState<SearchResults | null>(null);
   const [trending, setTrending] = useState<Trend[]>([]);
   const [error, setError] = useState("");
@@ -15,13 +18,30 @@ export default function Search() {
   useEffect(() => {
     let alive = true;
     api
-      .search(debouncedQuery, genre)
+      .search(debouncedQuery, genre, page * PAGE_SIZE, PAGE_SIZE)
       .then((r) => alive && (setResults(r), setError("")))
       .catch((e: Error) => alive && setError(e.message));
     return () => {
       alive = false;
     };
-  }, [debouncedQuery, genre]);
+  }, [debouncedQuery, genre, page]);
+
+  // Any change to what is being searched returns to the first page: staying on
+  // page 7 of a different result set would look like an empty catalogue.
+  function changeQuery(value: string) {
+    setQuery(value);
+    setPage(0);
+  }
+
+  function changeGenre(value: string) {
+    setGenre(value);
+    setPage(0);
+  }
+
+  function goToPage(next: number) {
+    setPage(next);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   useEffect(() => {
     api
@@ -43,21 +63,21 @@ export default function Search() {
           type="search"
           placeholder="Title, director or synopsis..."
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => changeQuery(e.target.value)}
           aria-label="Search movies"
         />
       </div>
 
       {results && results.genres.length > 0 && (
         <div className="row" style={{ marginBottom: "1.25rem" }}>
-          <button className={`chip ${genre === "" ? "on" : ""}`} onClick={() => setGenre("")}>
+          <button className={`chip ${genre === "" ? "on" : ""}`} onClick={() => changeGenre("")}>
             All
           </button>
           {results.genres.map((g) => (
             <button
               key={g.key}
               className={`chip ${genre === g.key ? "on" : ""}`}
-              onClick={() => setGenre(genre === g.key ? "" : g.key)}
+              onClick={() => changeGenre(genre === g.key ? "" : g.key)}
             >
               {g.key} <span className="n">{g.count}</span>
             </button>
@@ -70,9 +90,9 @@ export default function Search() {
       {results && (
         <>
           <p className="meta">
-            {results.hits.length < results.total
-              ? `showing ${results.hits.length} of ${results.total} results`
-              : `${results.total} ${results.total === 1 ? "result" : "results"}`}{" "}
+            {results.total === 0
+              ? "no results"
+              : `showing ${results.from + 1}\u2013${results.from + results.hits.length} of ${results.total}`}{" "}
             in {results.tookMillis} ms
           </p>
           <div className="grid">
@@ -90,6 +110,28 @@ export default function Search() {
             ))}
           </div>
           {results.hits.length === 0 && <p className="notice">Nothing matched. Try a shorter query.</p>}
+
+          {results.total > PAGE_SIZE && (
+            <nav className="pager" aria-label="Search results pages">
+              <button
+                className="ghost"
+                onClick={() => goToPage(page - 1)}
+                disabled={page === 0}
+              >
+                &larr; Previous
+              </button>
+              <span className="meta">
+                page {page + 1} of {Math.ceil(results.total / PAGE_SIZE)}
+              </span>
+              <button
+                className="ghost"
+                onClick={() => goToPage(page + 1)}
+                disabled={results.from + results.hits.length >= results.total}
+              >
+                Next &rarr;
+              </button>
+            </nav>
+          )}
         </>
       )}
 

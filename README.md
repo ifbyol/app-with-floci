@@ -221,7 +221,7 @@ other service does.
 
 | Route | Exercises | Notes |
 |---|---|---|
-| `GET /api/movies?q=&genre=` | OpenSearch | Fuzzy multi-field query, genre facets |
+| `GET /api/movies?q=&genre=&from=&size=` | OpenSearch | Fuzzy multi-field query, genre facets, paged |
 | `GET /api/movies/{id}` | Valkey → PostgreSQL | Cache-aside; returns `X-Cache: HIT\|MISS` and the lookup time |
 | `POST /api/movies` | all three | PostgreSQL tx → index → invalidate |
 | `GET /api/trending` | Valkey | `ZINCRBY` view counters |

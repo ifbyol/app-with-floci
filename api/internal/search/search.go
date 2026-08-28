@@ -18,7 +18,12 @@ import (
 	"github.com/okteto/app-with-floci/api/internal/model"
 )
 
-const IndexName = "movies"
+const (
+	IndexName = "movies"
+
+	// maxResultWindow mirrors OpenSearch's index.max_result_window default.
+	maxResultWindow = 10000
+)
 
 type Search struct {
 	c     *opensearchapi.Client
@@ -124,6 +129,8 @@ type Facet struct {
 
 type Results struct {
 	Total      int     `json:"total"`
+	From       int     `json:"from"`
+	Size       int     `json:"size"`
 	TookMillis int     `json:"tookMillis"`
 	Hits       []Hit   `json:"hits"`
 	Genres     []Facet `json:"genres"`
@@ -131,9 +138,22 @@ type Results struct {
 
 // Query runs a fuzzy multi-field search with an optional exact genre filter and
 // returns genre facets alongside the hits.
-func (s *Search) Query(ctx context.Context, q, genre string, size int) (*Results, error) {
+//
+// from/size are the offset and page length. OpenSearch refuses from+size beyond
+// max_result_window (10000 by default) rather than returning fewer results, so
+// both are clamped here instead of letting a crafted query produce a 500.
+func (s *Search) Query(ctx context.Context, q, genre string, from, size int) (*Results, error) {
 	if size <= 0 || size > 100 {
 		size = 20
+	}
+	if from < 0 {
+		from = 0
+	}
+	if from+size > maxResultWindow {
+		from = maxResultWindow - size
+		if from < 0 {
+			from = 0
+		}
 	}
 
 	var must any
@@ -155,6 +175,7 @@ func (s *Search) Query(ctx context.Context, q, genre string, size int) (*Results
 	}
 
 	body := map[string]any{
+		"from": from,
 		"size": size,
 		"query": map[string]any{
 			"bool": map[string]any{"must": must, "filter": filters},
@@ -181,6 +202,8 @@ func (s *Search) Query(ctx context.Context, q, genre string, size int) (*Results
 
 	out := &Results{
 		Total:      resp.Hits.Total.Value,
+		From:       from,
+		Size:       size,
 		TookMillis: resp.Took,
 		Hits:       make([]Hit, 0, len(resp.Hits.Hits)),
 		Genres:     []Facet{},

@@ -95,8 +95,9 @@ func (a *App) handleSearch(w http.ResponseWriter, r *http.Request) {
 	_, _, se := a.deps()
 	q := r.URL.Query()
 	size, _ := strconv.Atoi(q.Get("size"))
+	from, _ := strconv.Atoi(q.Get("from"))
 
-	res, err := se.Query(r.Context(), q.Get("q"), q.Get("genre"), size)
+	res, err := se.Query(r.Context(), q.Get("q"), q.Get("genre"), from, size)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "search failed", err)
 		return
