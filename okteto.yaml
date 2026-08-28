@@ -3,17 +3,9 @@
 # docker-compose.yml is the application definition. This file exists for exactly
 # one reason: Floci's RDS, ElastiCache and OpenSearch implementations start real
 # engine containers through a Docker daemon, which in a pod means a privileged
-# Docker-in-Docker container - and `privileged` is one of the few compose fields
-# Okteto parses only to warn about (pkg/model/stack_serializer.go). So Floci
-# comes from a manifest and everything else from compose.
-#
-# Requires the privileged-container guardrail to be relaxed for the namespace.
-# See docs/okteto-implications.md.
+# Docker-in-Docker container. So Floci comes from a manifest and everything else
+# from compose.
 
-# Names the development environment. Without it the name is inferred, and
-# `okteto endpoints` then looks for an app that does not exist and reports no
-# endpoints even though the ingress is fine. Keep this and the deploy in step: a
-# `--name` flag still overrides it.
 name: floci-flix
 
 deploy:
@@ -21,15 +13,6 @@ deploy:
     - name: Floci (privileged DinD - not expressible in compose)
       command: kubectl apply -n ${OKTETO_NAMESPACE} -f k8s/floci.yaml
   compose: docker-compose.yml
-
-destroy:
-  commands:
-    - name: Remove Floci
-      command: |
-        set -eu
-        kubectl delete -n ${OKTETO_NAMESPACE} -f k8s/floci.yaml --ignore-not-found
-        # volumeClaimTemplates outlive the StatefulSet; drop the image cache too.
-        kubectl delete pvc -n ${OKTETO_NAMESPACE} -l app=floci --ignore-not-found
 
 dev:
   api:
