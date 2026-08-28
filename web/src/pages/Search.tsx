@@ -70,7 +70,10 @@ export default function Search() {
       {results && (
         <>
           <p className="meta">
-            {results.total} {results.total === 1 ? "result" : "results"} in {results.tookMillis} ms
+            {results.hits.length < results.total
+              ? `showing ${results.hits.length} of ${results.total} results`
+              : `${results.total} ${results.total === 1 ? "result" : "results"}`}{" "}
+            in {results.tookMillis} ms
           </p>
           <div className="grid">
             {results.hits.map((h) => (

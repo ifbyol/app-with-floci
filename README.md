@@ -195,7 +195,7 @@ k8s/floci.yaml       The one manifest — StatefulSet + Service for privileged
                      Docker-in-Docker. Self-contained; nothing to template.
 api/                 Go: provisioning, discovery, the three data paths, the
                      inspector endpoint. internal/store/schema.sql is the DDL,
-                     internal/store/seed.sql the starter catalogue (30 movies),
+                     internal/store/seed.sql the starter catalogue (150 movies),
                      both embedded and applied on connect.
 web/                 React + Vite + TypeScript: search, detail, add, emulator
 docs/                Okteto implications and the guardrail decision
