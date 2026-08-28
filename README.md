@@ -36,6 +36,56 @@ cluster Floci runs inside a **privileged Docker-in-Docker pod**.
 
 ---
 
+## How it is deployed
+
+Floci runs as a container **inside** the Docker daemon, not as a sibling
+Kubernetes container. That is forced: Floci resolves the OpenSearch node by
+Docker container name, and only a container attached to that network can use
+Docker's embedded resolver.
+
+```mermaid
+flowchart TB
+    APP["api pod<br/>Go application"]
+    SVC["Service floci (ClusterIP)<br/>4566, 7001-7003, 6379-6381, 9400-9402"]
+
+    subgraph POD["floci-0 — a single privileged container (docker:28-dind)"]
+        subgraph NET["docker network floci-net"]
+            FLOCI["Floci<br/>4566 AWS API<br/>7001 RDS proxy<br/>6379 ElastiCache proxy"]
+            PG[("PostgreSQL<br/>publishes nothing")]
+            VK[("Valkey<br/>publishes nothing")]
+            OS[("OpenSearch<br/>publishes 9400")]
+        end
+    end
+
+    APP --> SVC
+    SVC -->|"4566 control plane, 7001 SQL, 6379 RESP"| FLOCI
+    SVC -->|"9400 REST, bypassing Floci"| OS
+    FLOCI -->|"by container IP"| PG
+    FLOCI -->|"by container IP"| VK
+    FLOCI -.->|"readiness, by container name"| OS
+```
+
+**Why one Service reaches all of it.** `dockerd` runs inside the pod, so the
+ports it publishes are bound in the pod's own network namespace and land on the
+pod IP. A plain ClusterIP Service therefore reaches both Floci's own listeners
+*and* the port the OpenSearch container publishes — even though nothing in the
+pod spec declares 9400.
+
+**Two ways a service is exposed**, and the difference is the thing to remember:
+
+| | Listener on the pod | Traffic path |
+|---|---|---|
+| RDS `floci:7001` | Floci's own TCP proxy | app → **Floci** → PostgreSQL |
+| ElastiCache `floci:6379` | Floci's own TCP proxy | app → **Floci** → Valkey |
+| OpenSearch `floci:9400` | the OpenSearch container | app → **OpenSearch**, Floci uninvolved |
+
+PostgreSQL and Valkey publish no ports at all, so they are reachable only
+*through* Floci, which is also where SigV4 and IAM auth are enforced. OpenSearch
+publishes its own port, so it is reachable *around* Floci — which is why the
+`floci:9400` address looks like it goes to Floci and does not. Floci still talks
+to it, but only to poll readiness, and only by container name — see
+[The one wrinkle](#the-one-wrinkle).
+
 ## Deploy it
 
 ```bash
